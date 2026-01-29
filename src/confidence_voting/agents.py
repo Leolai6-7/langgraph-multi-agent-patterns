@@ -5,16 +5,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_aws import ChatBedrock
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from confidence_voting.state import Vote, VotingState
 
-_LLM = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.7)
+_LLM = ChatBedrock(
+    model_id="anthropic.claude-3-haiku-20240307-v1:0",
+    region_name="us-east-1",
+    model_kwargs={"temperature": 0.7, "max_tokens": 1024},
+)
 
 _AGENT_PERSONAS: dict[str, str] = {
     "optimist": (

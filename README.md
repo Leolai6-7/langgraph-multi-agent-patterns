@@ -20,10 +20,11 @@ START → dispatcher → [agent_optimist, agent_skeptic, agent_analyst] → aggr
 pip install -e .
 ```
 
-Set your Google API key:
+Configure AWS credentials with Bedrock access:
 
 ```bash
-export GOOGLE_API_KEY="your-api-key"
+aws configure
+# or use an assumed role with Bedrock permissions
 ```
 
 ## Usage

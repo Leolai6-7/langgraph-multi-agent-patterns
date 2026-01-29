@@ -9,9 +9,8 @@ description = "Multi-agent confidence-weighted voting system built with LangGrap
 requires-python = ">=3.10"
 dependencies = [
     "langgraph>=0.2",
-    "langchain-google-genai>=2.0",
+    "langchain-aws>=0.2",
     "pydantic>=2.0",
-    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

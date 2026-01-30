@@ -15,3 +15,4 @@ ENV/
 .pytest_cache/
 *.so
 .DS_Store
+vector_store/

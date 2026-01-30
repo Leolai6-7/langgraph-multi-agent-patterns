@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,44 +12,116 @@ from self_correction_writing.common import invoke, parse_json
 from self_correction_writing.strategy3_reflexion.state import WritingState
 from self_correction_writing.vector_memory import ReflectionVectorStore
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
-# Node: generator (Actor)
+# Node: retrieve_memory
 # ---------------------------------------------------------------------------
-def generator(state: WritingState) -> dict[str, Any]:
-    """根據主題、標準、以及反思記憶庫中的教訓來撰寫文章。
+def retrieve_memory(state: WritingState) -> dict[str, Any]:
+    """從 ChromaDB 檢索向量記憶 + boost utility，合併 session reflections。
 
-    關鍵：把 reflections 動態注入到 prompt 中，
-    等於告訴模型「你過去犯過這些錯，這次不要再犯」。
-
-    雙記憶系統：
-    1. State reflections — session 內的反思（即時）
-    2. ChromaDB — 跨 session 持久化的語意反思（向量檢索）
+    寫入 state["retrieved_memories"]，供 grade_relevance 評分。
     """
-    # --- Session 內反思 ---
     reflections = state.get("reflections", [])
-
-    # --- 跨 session 向量記憶檢索 ---
     topic = state["topic"]
     criteria = state["criteria"]
     criteria_hash = hashlib.md5(criteria.encode()).hexdigest()[:8]
 
-    vector_store = ReflectionVectorStore.get_instance()
-    query = f"{topic} {criteria}"
-    retrieved = vector_store.retrieve_reflections(
-        query=query,
-        metadata_filter={"task_type": "writing", "criteria_hash": criteria_hash},
-        top_k=5,
-        similarity_threshold=0.75,
-    )
-    retrieved_texts = [r["document"] for r in retrieved]
+    retrieved: list[dict] = []
+    try:
+        vector_store = ReflectionVectorStore.get_instance()
+        query = f"{topic} {criteria}"
+        retrieved = vector_store.retrieve_reflections(
+            query=query,
+            metadata_filter={"task_type": "writing", "criteria_hash": criteria_hash},
+            top_k=5,
+            similarity_threshold=0.75,
+        )
+        # 被檢索命中的記憶增加 utility_score
+        if retrieved:
+            vector_store.boost_utility([r["id"] for r in retrieved])
+    except Exception:
+        logger.exception("Failed to retrieve/boost reflections from vector store")
 
-    # 合併：去重（向量庫可能包含本 session 已有的反思）
-    all_reflections = list(dict.fromkeys(reflections + retrieved_texts))
+    # 合併 session reflections 與向量記憶，去重
+    retrieved_texts = [r["document"] for r in retrieved]
+    all_texts = list(dict.fromkeys(reflections + retrieved_texts))
+
+    # 將每條記憶存為 dict 以便 grader 逐條評分
+    retrieved_memories = [{"text": t} for t in all_texts]
+
+    return {"retrieved_memories": retrieved_memories}
+
+
+# ---------------------------------------------------------------------------
+# Node: grade_relevance (Self-RAG Grader)
+# ---------------------------------------------------------------------------
+def grade_relevance(state: WritingState) -> dict[str, Any]:
+    """用 LLM 批量評分每條記憶的相關性，過濾不相關記憶。
+
+    一次 LLM call 送出所有記憶，回傳 JSON array ["YES", "NO", ...]。
+    只保留 "YES" 的記憶寫入 state["graded_memories"]。
+    """
+    memories = state.get("retrieved_memories", [])
+    if not memories:
+        return {"graded_memories": []}
+
+    topic = state["topic"]
+    criteria = state["criteria"]
+
+    numbered = "\n".join(f"{i+1}. {m['text']}" for i, m in enumerate(memories))
+
+    system = (
+        "你是一位相關性評分員。判斷每條記憶對當前寫作任務是否相關。\n"
+        '回覆 JSON array，每個元素是 "YES" 或 "NO"，順序對應輸入的記憶。\n'
+        '只回覆 JSON array，例如：["YES", "NO", "YES"]'
+    )
+    human = (
+        f"主題：{topic}\n"
+        f"標準：{criteria}\n\n"
+        f"記憶列表：\n{numbered}\n\n"
+        "請回覆 JSON array。"
+    )
+    raw = invoke(system, human)
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1]
+            cleaned = cleaned.rsplit("```", 1)[0]
+        verdicts = json.loads(cleaned)
+    except (json.JSONDecodeError, IndexError):
+        verdicts = []
+
+    # 若解析失敗或長度不符，保守地保留所有記憶
+    if not isinstance(verdicts, list) or len(verdicts) != len(memories):
+        logger.warning(
+            "Grade relevance: unexpected LLM response, keeping all %d memories",
+            len(memories),
+        )
+        return {"graded_memories": [m["text"] for m in memories]}
+
+    graded = [
+        m["text"]
+        for m, v in zip(memories, verdicts)
+        if str(v).strip().upper() == "YES"
+    ]
+    logger.info(
+        "Grade relevance: kept %d / %d memories", len(graded), len(memories)
+    )
+    return {"graded_memories": graded}
+
+
+# ---------------------------------------------------------------------------
+# Node: generate (純生成)
+# ---------------------------------------------------------------------------
+def generate(state: WritingState) -> dict[str, Any]:
+    """讀取已過濾的 graded_memories，注入 prompt 生成文章。"""
+    graded = state.get("graded_memories", [])
 
     reflection_block = ""
-    if all_reflections:
-        memory = "\n".join(f"- {r}" for r in all_reflections)
+    if graded:
+        memory = "\n".join(f"- {r}" for r in graded)
         reflection_block = (
             f"\n\n從過去的嘗試中學習到的教訓：\n{memory}\n"
             "請務必將這些教訓融入你的寫作中，避免重蹈覆轍。"
@@ -59,8 +133,8 @@ def generator(state: WritingState) -> dict[str, Any]:
         "文章須包含引言、多個論述段落與結論。請全程使用繁體中文。"
     )
     human = (
-        f"主題：{topic}\n"
-        f"標準：{criteria}"
+        f"主題：{state['topic']}\n"
+        f"標準：{state['criteria']}"
         f"{reflection_block}\n\n"
         "請撰寫完整文章。"
     )
@@ -143,17 +217,25 @@ def reflector(state: WritingState) -> dict[str, Any]:
     criteria_hash = hashlib.md5(criteria.encode()).hexdigest()[:8]
 
     vector_store = ReflectionVectorStore.get_instance()
-    vector_store.add_reflection(
-        reflection=reflection,
-        metadata={
-            "task_type": "writing",
-            "topic": topic,
-            "score": state.get("score", 0.0),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "iteration": iteration,
-            "criteria_hash": criteria_hash,
-        },
-    )
+    metadata_filter = {"task_type": "writing", "criteria_hash": criteria_hash}
+
+    try:
+        # 策略 2：語意去重寫入
+        vector_store.add_reflection_with_dedup(
+            reflection=reflection,
+            metadata={
+                "task_type": "writing",
+                "topic": topic,
+                "score": state.get("score", 0.0),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "iteration": iteration,
+                "criteria_hash": criteria_hash,
+            },
+        )
+        # 寫入後觸發記憶維護（衰減 + 修剪 + 合併）
+        vector_store.run_maintenance(metadata_filter=metadata_filter)
+    except Exception:
+        logger.exception("Failed to persist reflection or run maintenance")
 
     return {
         "reflections": [reflection],

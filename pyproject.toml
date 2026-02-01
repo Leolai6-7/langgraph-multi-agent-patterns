@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "confidence-voting"
-version = "0.1.0"
-description = "Multi-agent confidence-weighted voting system built with LangGraph"
+name = "langgraph-multi-agent-patterns"
+version = "0.2.0"
+description = "Multi-agent pattern implementations with LangGraph: voting, self-correction, supervisor, orchestrator"
 requires-python = ">=3.10"
 dependencies = [
     "langgraph>=0.2",

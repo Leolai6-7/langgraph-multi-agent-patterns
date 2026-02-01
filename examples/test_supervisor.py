@@ -21,6 +21,7 @@ def main():
             HumanMessage(content="What are the latest trends in renewable energy in 2024?")
         ],
         "next": "",
+        "scratchpad": {},
     }
 
     # Stream step-by-step to observe routing
@@ -36,10 +37,13 @@ def main():
             print(f"  Route → {node_output['next']}")
         if "messages" in node_output:
             for msg in node_output["messages"]:
-                preview = msg.content[:200]
-                if len(msg.content) > 200:
+                preview = msg.content[:300]
+                if len(msg.content) > 300:
                     preview += "..."
-                print(f"  Message: {preview}")
+                print(f"  [公共區] Message: {preview}")
+        if "scratchpad" in node_output:
+            raw = str(node_output["scratchpad"].get("research_raw_results", ""))
+            print(f"  [私有區] scratchpad: 原始數據 {len(raw)} 字元（Supervisor 看不到）")
 
     print(f"\n{'=' * 60}")
     print("Done!")

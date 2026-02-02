@@ -23,8 +23,9 @@ class WhitepaperState(TypedDict):
     #   {
     #     "topic": str,                   # 使用者主題
     #     "research_query": str,          # 搜尋關鍵字
-    #     "research_data": str,           # 原始搜尋結果
-    #     "current_draft": str,           # Writer 最新草稿（Markdown）
-    #     "editor_critique": str,         # Editor 的審稿意見（純描述，不含 verdict）
-    #     "revision_count": int,          # 修改次數（防無限迴圈）
+    #     "research_data": str,           # 原始搜尋結果（資料流：不進 Supervisor prompt）
+    #     "research_count": int,          # Researcher 搜尋次數（控制流指標）
+    #     "current_draft": str,           # Writer 最新草稿（資料流：不進 Supervisor prompt）
+    #     "editor_critique": str,         # Editor 審稿意見（資料流：Supervisor 需語義理解，附上）
+    #     "revision_count": int,          # 修改次數（控制流指標 + 安全閥）
     #   }

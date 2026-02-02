@@ -113,12 +113,17 @@ def supervisor_node(state: WhitepaperState) -> dict[str, Any]:
 
     # ── Editor 完成：唯一需要 LLM 判斷的地方 ──
     if last_actor == "Editor":
-        # 只把最新的 Editor 意見（從 messages 最後一條）傳給 LLM
-        editor_msg = ""
-        for msg in reversed(state["messages"]):
-            if msg.content.startswith("[Editor]"):
-                editor_msg = msg.content
-                break
+        # 從 scratchpad 組出結構化指標摘要（控制流）
+        # 完整 critique 是資料流，但 Supervisor 需要語義理解才能路由，所以附上
+        editor_critique = scratchpad.get("editor_critique", "")
+        research_count = scratchpad.get("research_count", 1)
+
+        status_brief = (
+            f"=== 當前狀況 ===\n"
+            f"審稿輪次：第 {revision_count} 輪\n"
+            f"Researcher 已搜尋：{research_count} 次\n"
+            f"Writer 已修改：{revision_count - 1} 次\n"
+        )
 
         worker_cards = "\n\n".join(
             f"【{name}】\n{desc}" for name, desc in _WORKER_DESCRIPTIONS.items()
@@ -127,7 +132,9 @@ def supervisor_node(state: WhitepaperState) -> dict[str, Any]:
             SystemMessage(
                 content=_EDITOR_JUDGE_SYSTEM.format(worker_cards=worker_cards)
             ),
-            HumanMessage(content=f"Editor 的審稿意見：\n{editor_msg}"),
+            HumanMessage(
+                content=f"{status_brief}\n=== Editor 審稿意見 ===\n{editor_critique}"
+            ),
         ])
         print(f"  [Supervisor reasoning] {result.reasoning}")
         return {"next": result.next}
@@ -200,6 +207,7 @@ def researcher_node(state: WhitepaperState) -> dict[str, Any]:
     scratchpad["topic"] = topic
     scratchpad["research_query"] = query
     scratchpad["research_data"] = combined_data
+    scratchpad["research_count"] = scratchpad.get("research_count", 0) + 1
 
     return {
         "messages": [
